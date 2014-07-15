@@ -1,23 +1,24 @@
 {-# LANGUAGE JavaScriptFFI #-}
-{- # LANGUAGE JavaScriptFFI #-}
 module Main where
-
-
--- import Data.String( IsString )
 
 import GHCJS.Foreign
 import GHCJS.Types
 
 import Control.Applicative( pure )
+import GHC.Conc( forkIO )
+import Control.Applicative( (<$>), (<*>) )
+import Control.Concurrent.Chan( Chan, newChan, readChan, writeChan )
+import Control.Monad( forever )
 import FRP.Sodium
 
 -- Первое воплощение будет очень, очень простым
--- Далее следует придумать безопасный код, который проверяет специальные значения null и undefined
+-- Далее следует придумать безопасный код, который проверяет
+-- специальные значения null и undefined
 -- Скорее всего нужно будет описать монаду
 
 
-data DocumentObject_ = DocumentObject_
-type DocumentObject = JSRef DocumentObject_
+data DocumentElement_ = DocumentElement_
+type DocumentElement = JSRef DocumentElement_
 
 
 foreign import javascript safe "console.error($1)"
@@ -30,32 +31,108 @@ foreign import javascript safe "console.log($1)"
 conslog :: String -> IO ()
 conslog = js_conslog . toJSString
 
+foreign import javascript safe "console.warn($1)"
+    js_conswarn :: JSString -> IO ()
+conswarn :: String -> IO ()
+conswarn = js_conswarn . toJSString
+
 foreign import javascript safe "console.log('%o', $1)"
     js_consobj :: JSRef a -> IO ()
 consobj :: JSRef a -> IO ()
 consobj = js_consobj
 
+foreign import javascript safe "console.group($1);"
+    js_consgrp :: JSString -> IO ()
+consgrp :: String -> IO ()
+consgrp = js_consgrp . toJSString
+
+foreign import javascript safe "console.groupEnd();"
+    js_consgre :: IO ()
+consgre :: IO ()
+consgre = js_consgre
+
 
 foreign import javascript unsafe "$r = document.getElementById($1);"
-    js_gebi :: JSString -> IO DocumentObject
-ngebi :: String -> IO DocumentObject
+    js_gebi :: JSString -> IO DocumentElement
+ngebi :: String -> IO DocumentElement
 ngebi = js_gebi . toJSString
 
+foreign import javascript unsafe "$r = $1.querySelector($2);"
+    js_qsel :: DocumentElement -> JSString -> IO DocumentElement
+nqsel :: DocumentElement -> String -> IO DocumentElement
+nqsel o = js_qsel o . toJSString
+
+foreign import javascript unsafe "$r = $1.querySelectorAll($2);"
+    js_qsela :: DocumentElement -> JSString -> IO (JSArray DocumentElement_)
+qsela :: DocumentElement -> String -> IO [DocumentElement]
+qsela o xp = js_qsela o (toJSString xp) >>= fromArray
+
+
+foreign import javascript safe "$r = document.createElement($1)"
+    js_dcrel :: JSString -> IO DocumentElement
+dcrel = js_dcrel . toJSString
+
+
+foreign import javascript safe "$1.classList.add($2);"
+    js_addcln :: DocumentElement -> JSString -> IO ()
+addcln :: DocumentElement -> String -> IO DocumentElement
+addcln o cs = do
+    let cl = map toJSString (words cs)
+    mapM_ (js_addcln o) cl
+    return o
+
+foreign import javascript safe "$1.innerText = $2"
+    js_setintext :: DocumentElement -> JSString -> IO ()
+setintext :: DocumentElement -> String -> IO DocumentElement
+setintext o t = js_setintext o (toJSString t) >> return o
+
+foreign import javascript safe "r = $1.appendChild($2);"
+    js_appcld :: DocumentElement -> DocumentElement -> IO DocumentElement
+appcld :: DocumentElement -> DocumentElement -> IO DocumentElement
+appcld = js_appcld
+
+
+foreign import javascript safe "$1.addEventListener($2, $3);"
+    js_addevlis :: DocumentElement -> JSString -> (JSFun (DocumentEvent -> IO ())) -> IO ()
+addevlis :: (JSRef DocumentElement_) -> String -> (DocumentEvent -> IO ()) -> IO DocumentElement
+addevlis o et f = do
+    ch <- newChan :: IO (Chan DocumentEvent)
+    forkIO (forever $ readChan ch >>= f)
+    -- FIXME: Сообщить о том, что DomRetain ведёт себя некорректно
+    cb <- asyncCallback1 {-(DomRetain (castRef o))-} AlwaysRetain (\e -> writeChan ch e)
+    js_addevlis o (toJSString et) cb
+    return o
+
+
+foreign import javascript safe "$r = new Date().getTime();"
+    js_currts :: IO Int
+currts :: IO Int
+currts = js_currts
+
+foreign import javascript safe "requestAnimationFrame($1);"
+    js_reqaf :: JSFun (IO ()) -> IO ()
+reqaf :: IO () -> IO ()
+reqaf f = do
+    -- FIXME Использовать другой способ удержания
+    cb <- asyncCallback AlwaysRetain f
+    js_reqaf cb
+
+foldlMerge :: [Event a] -> Event a
+foldlMerge (e:es) = foldl merge e es
+
+
 data DocumentEvent_ = AnyEvent
-                    | MouseEvent { x :: Int, y :: Int }
+                    --  | MouseEvent { x :: Int, y :: Int }
 type DocumentEvent = JSRef DocumentEvent_
 
-type EventSource = ( [DocumentEvent] , DocumentObject )
+type EventSource = ( [Event DocumentEvent] , DocumentElement )
 
 -- | ShGDYaState – Состояние сущности ШГДЯ
 data ShGDYaState = ShGDYaState
-        { -- host :: DocumentObject -- ^ Объект документа в котором живет сущность
-        -- , 
-        switches :: Event [EventSource] -- ^ переключатели изображений с ихнеми потоками событий
-        , activeImage :: Event DocumentObject -- ^ текущее изображение
-        , nextUpdateTS :: Event Int -- ^ метка времени следуюего обновления, мсек
-        , nextUpdateIn :: Event Int -- ^ кол-во времени до следующего обновления, мсек
-        }
+         { activeImage :: Behaviour DocumentElement -- ^ текущее изображение
+         , nextUpdateTS :: Behaviour Int -- ^ метка времени следуюего обновления, мсек
+         , nextUpdateIn :: Behaviour Int -- ^ кол-во времени до следующего обновления, мсек
+         }
 
 -- | ШГДЯ
 -- ШГДЯ - это реактивная сущность, для того, чтобы проявить себя ей нужно следующее:
@@ -66,40 +143,117 @@ data ShGDYaState = ShGDYaState
 -- обновление объектов документа
 type ShGDYa = Behaviour ShGDYaState
 
-animateShGDYa :: DocumentObject -- объект документа, в котором расположиться сущность
-              -> [EventSource] -- упрорядоченный список переключателей - источников событий
+buildShGDYaBody :: DocumentElement -- объект, содержащий образы
+                -> String -- х-путь по которому искать изображения
+                -> ((DocumentElement, Int) -> Reactive ()) -- функция для оповещения сущности
+                -> Int -- задержка в миллисекундах
+                -> IO DocumentElement
+buildShGDYaBody h xp f d = do
+    consgrp "Построение тела ШГДЯ"
+    consobj h
+
+    imgs <- h `qsela` xp
+    conslog $ "Поиск образов по х-пути: " ++ xp
+    conslog $ "Найдено образов:" ++ (show . length) imgs
+    mapM_ consobj imgs
+
+    buildSwitches h imgs >>= bindEvents f d
+
+    consgre
+    -- FIXME Небезопасное получение первого элемента
+    return $ head imgs
+  where
+    buildSwitches :: DocumentElement -- основной объект (тело)
+                  -> [DocumentElement] -- изображения
+                  -> IO [(DocumentElement, DocumentElement)] -- переключатели
+    buildSwitches _ [] = conslog "Нет образов!" >> return []
+    buildSwitches h is = do
+        sh <- dcrel "div" >>= flip addcln "switches"
+        -- FIXME Ввести возможность добавления переключателей вперёд-назад
+        --       А также возможность не оборажать цифровые
+        --       Таким образом три варианта = Только первые, только вторые, все вместе
+        sws <- mapM (\(_, n) -> do
+                        so <- dcrel "div"
+                        so `addcln` "switch" >>= appcld sh
+                        so `setintext` (show n)) (zip is [1..])
+        h `appcld` sh
+        return (zip is sws)
+    bindEvents :: ((DocumentElement, Int) -> Reactive ()) -- функция для оповещения сущности
+               -> Int -- задержка в миллисекундах
+               -> [(DocumentElement, DocumentElement)] -- пары образ-переключатель
+               -> IO ()
+    bindEvents f d isps = do
+        mapM_ (\(i,s) -> addevlis s "click" (\_ -> findNextNNotify i f d)) isps
+        where findNextNNotify :: DocumentElement -- выбранный образ
+                              -> ((DocumentElement, Int) -> Reactive ()) -- функция для оповещения
+                              -> Int -- задержка в миллисекундах
+                              -> IO ()
+              findNextNNotify i f d = sync . f . (,) i . (+) d =<< currts
+
+animateShGDYa :: Event (DocumentElement, Int) -- поток событий, который сообщает необходимость сменить образ
+              -> DocumentElement -- первый образ
               -> Int -- задержка для отображения каждого изображения, миллисекунды
               -> Behaviour Int -- поведение, содержащее значение текущей метки времени, миллисекунды
               -> Int -- кол-во повторений всех изображений (0 для бесконечного повторения), временно не используется.
-              -> Reactive ShGDYa
-animateShGDYa h [] _ _ _ = do
-    nbf <- newBehaviour $ ShGDYaState never never never never
-    (return . fst) nbf
-animateShGDYa h sl d bct lc = do
+              -> Reactive ShGDYaState
+-- [EventSource] -- упрорядоченный список переключателей - источников событий
+-- animateShGDYa [] _ _ _ = return $ ShGDYaState never never never never
+-- FIXME: Отдельно стоит описать ситуацию, когда у нас только один источник.
+animateShGDYa ae ii d bct lc = do
     -- Создаём саму сущность
     ct <- sample bct
-    (b_sl, fn_sl) <- newBehaviour sl
-    (b_ai, fn_ai) <- newBehaviour ((snd . head) sl)
+    let e_ct = value bct
     (b_nut, fn_nut) <- newBehaviour (ct + d)
-    (b_nur, fn_nur) <- newBehaviour d
-    (b_ess, fn_ess) <- newBehaviour $ ShGDYaState (value b_sl) (value b_ai) (value b_nut) (value b_nur) 
-    -- Теперь, зададим реакции на потоки событий
-    return b_ess
+    (b_ai, _) <- newBehaviour ii
+    let e_ai  = snapshot (\(ni, _) _ -> ni) ae b_ai
+        e_nut = snapshot (\(_, nt) _ -> nt) ae b_nut
+        e_nui = snapshot subtract e_ct b_nut
+    rb_ai <- hold ii e_ai
+    rb_nut <- hold (ct + d) e_nut
+    rb_nui <- hold d e_nui
+    return $ ShGDYaState rb_ai rb_nut rb_nui
+
+tryAnimateShGDYa :: String -> IO ()
+tryAnimateShGDYa str = do
+    -- Сначала мы строим тело для будущей сущности и создаём всё необходимое для её жизни
+    -- В это число в первую очередь входит поток событий, который будет сообщать сущности
+    -- какой образ выбрать текущим и когда кончится его время (метка времени следующего
+    -- образа).
+    -- Именно здесь будет создана нить, которая будет снабжать поток событий метками
+    -- времени и проверять необходимость переключения образа.
+    -- Именно здесь будут созданы переключатели, которые будут реагировать на щелчок мыши
+    -- и отправлять сущности сообщение о необходимости смены образа.
+    consgrp "Рождение ШГДЯ"
+    ne <- ngebi str
+    case (isNull ne) of
+        True -> conserr $ "Не найден элемент '" ++ str ++ "'"
+        False -> do
+            (e_a, fn_a)   <- sync newEvent -- поток сигналов для смены образа
+            (b_ct, fn_ct) <- sync . newBehaviour =<< currts -- состояние текущего времени
+            let delay = 10 * 1000
+            ii <- buildShGDYaBody ne ".image" fn_a delay
+            shgdya <- sync $ animateShGDYa e_a ii delay b_ct 0
+            let loop = do
+                cts <- currts
+                nts <- sync $ sample (nextUpdateTS shgdya)
+                sync $ fn_ct cts
+                reqaf loop
+
+            forkIO (reqaf loop)
+            x <- sync $ listen ((value . activeImage) shgdya) (\o -> consobj o)
+            y <- sync $ listen ((value . nextUpdateTS) shgdya) (\t -> ngebi "trace" >>= flip setintext (show t) >> return ())
+            conslog "Оживление завершено"
+            consobj ne
+    consgre
+
 
 targetId :: String
 targetId = "shgdya"
 
-tryAnimate :: String -> IO ()
-tryAnimate str = do
-    ne <- ngebi targetId
-    case (isNull ne) of
-        True -> conserr $ "Не найден элемент " ++ str
-        False -> conslog "wip" 
-
 
 main = do
     let tid = targetId
-    tryAnimate tid
+    tryAnimateShGDYa tid
 -- Поиск элемента, элементов
 -- Настройка стилей
 -- Создание реактивных событий

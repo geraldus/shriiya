@@ -7,6 +7,7 @@
     <script language="javascript" src="out.js"></script>
     <style>
         BODY { font-family : 'DejaVu Sans'; }
+        H1 { text-align : center; }
         .Dn { display : none; }
         #main {
             width : 100%;
@@ -17,6 +18,26 @@
             height : 270px;
             margin : auto;
             position : relative;
+            display : flex;
+            flex-wrap : wrap;
+        }
+            #shgdya .image {
+                flex-grow : 1;
+                flex-shrink : 0;
+                width : 100%;
+                height : 95%;
+            }
+        .switches {
+            display : flex;
+            flex-grow : 1;
+            flex-shrink : 0;
+            justify-content : center;
+        }
+        .switch {
+            font-size : 0.5em;
+            font-weight : 100;
+            margin : 0 0.1em;
+            padding : 0.2em;
         }
     </style>
   </head>
@@ -29,6 +50,7 @@
               <div class="image Dn">Образъ 3</div>
           </div>
       </div>
+      <div id="trace"></div>
   </body>
   <script language="javascript">
     h$main(h$mainZCMainzimain);
