@@ -8,7 +8,7 @@ import Control.Applicative( pure )
 import GHC.Conc( forkIO )
 import Control.Applicative( (<$>), (<*>) )
 import Control.Concurrent.Chan( Chan, newChan, readChan, writeChan )
-import Control.Monad( forever )
+import Control.Monad( forever, liftM )
 import FRP.Sodium
 
 -- Первое воплощение будет очень, очень простым
@@ -105,8 +105,8 @@ addevlis o et f = do
 
 
 foreign import javascript safe "$r = new Date().getTime();"
-    js_currts :: IO Int
-currts :: IO Int
+    js_currts :: IO Double
+currts :: IO Double
 currts = js_currts
 
 foreign import javascript safe "requestAnimationFrame($1);"
@@ -127,11 +127,11 @@ type DocumentEvent = JSRef DocumentEvent_
 
 type EventSource = ( [Event DocumentEvent] , DocumentElement )
 
--- | ShGDYaState – Состояние сущности ШГДЯ
-data ShGDYaState = ShGDYaState
+-- | SHRIIYAState – Состояние сущности ШГДЯ
+data SHRIIYAState = SHRIIYAState
          { activeImage :: Behaviour DocumentElement -- ^ текущее изображение
-         , nextUpdateTS :: Behaviour Int -- ^ метка времени следуюего обновления, мсек
-         , nextUpdateIn :: Behaviour Int -- ^ кол-во времени до следующего обновления, мсек
+         , nextUpdateTS :: Behaviour Double -- ^ метка времени следуюего обновления, мсек
+         , nextUpdateIn :: Behaviour Double -- ^ кол-во времени до следующего обновления, мсек
          }
 
 -- | ШГДЯ
@@ -141,14 +141,14 @@ data ShGDYaState = ShGDYaState
 -- Что на выходе? Поведение, содержащее текущее состояние сущности
 -- В потоке ввода-вывода организовывается прослушивание состояния сущности и осуществляется
 -- обновление объектов документа
-type ShGDYa = Behaviour ShGDYaState
+type SHRIIYA = Behaviour SHRIIYAState
 
-buildShGDYaBody :: DocumentElement -- объект, содержащий образы
+buildSHRIIYABody :: DocumentElement -- объект, содержащий образы
                 -> String -- х-путь по которому искать изображения
-                -> ((DocumentElement, Int) -> Reactive ()) -- функция для оповещения сущности
-                -> Int -- задержка в миллисекундах
+                -> ((DocumentElement, Double) -> Reactive ()) -- функция для оповещения сущности
+                -> Double -- задержка в миллисекундах
                 -> IO DocumentElement
-buildShGDYaBody h xp f d = do
+buildSHRIIYABody h xp f d = do
     consgrp "Построение тела ШГДЯ"
     consobj h
 
@@ -178,28 +178,25 @@ buildShGDYaBody h xp f d = do
                         so `setintext` (show n)) (zip is [1..])
         h `appcld` sh
         return (zip is sws)
-    bindEvents :: ((DocumentElement, Int) -> Reactive ()) -- функция для оповещения сущности
-               -> Int -- задержка в миллисекундах
+    bindEvents :: ((DocumentElement, Double) -> Reactive ()) -- функция для оповещения сущности
+               -> Double -- задержка в миллисекундах
                -> [(DocumentElement, DocumentElement)] -- пары образ-переключатель
                -> IO ()
     bindEvents f d isps = do
         mapM_ (\(i,s) -> addevlis s "click" (\_ -> findNextNNotify i f d)) isps
         where findNextNNotify :: DocumentElement -- выбранный образ
-                              -> ((DocumentElement, Int) -> Reactive ()) -- функция для оповещения
-                              -> Int -- задержка в миллисекундах
+                              -> ((DocumentElement, Double) -> Reactive ()) -- функция для оповещения
+                              -> Double -- задержка в миллисекундах
                               -> IO ()
               findNextNNotify i f d = sync . f . (,) i . (+) d =<< currts
 
-animateShGDYa :: Event (DocumentElement, Int) -- поток событий, который сообщает необходимость сменить образ
+animateSHRIIYA :: Event (DocumentElement, Double) -- поток событий, который сообщает необходимость сменить образ
               -> DocumentElement -- первый образ
-              -> Int -- задержка для отображения каждого изображения, миллисекунды
-              -> Behaviour Int -- поведение, содержащее значение текущей метки времени, миллисекунды
+              -> Double -- задержка для отображения каждого изображения, миллисекунды
+              -> Behaviour Double -- поведение, содержащее значение текущей метки времени, миллисекунды
               -> Int -- кол-во повторений всех изображений (0 для бесконечного повторения), временно не используется.
-              -> Reactive ShGDYaState
--- [EventSource] -- упрорядоченный список переключателей - источников событий
--- animateShGDYa [] _ _ _ = return $ ShGDYaState never never never never
--- FIXME: Отдельно стоит описать ситуацию, когда у нас только один источник.
-animateShGDYa ae ii d bct lc = do
+              -> Reactive SHRIIYAState
+animateSHRIIYA ae ii d bct lc = do
     -- Создаём саму сущность
     ct <- sample bct
     let e_ct = value bct
@@ -207,14 +204,13 @@ animateShGDYa ae ii d bct lc = do
     (b_ai, _) <- newBehaviour ii
     let e_ai  = snapshot (\(ni, _) _ -> ni) ae b_ai
         e_nut = snapshot (\(_, nt) _ -> nt) ae b_nut
-        e_nui = snapshot subtract e_ct b_nut
     rb_ai <- hold ii e_ai
     rb_nut <- hold (ct + d) e_nut
-    rb_nui <- hold d e_nui
-    return $ ShGDYaState rb_ai rb_nut rb_nui
+    let rb_nui = subtract <$> bct <*> rb_nut
+    return $ SHRIIYAState rb_ai rb_nut rb_nui
 
-tryAnimateShGDYa :: String -> IO ()
-tryAnimateShGDYa str = do
+tryAnimateSHRIIYA :: String -> IO ()
+tryAnimateSHRIIYA str = do
     -- Сначала мы строим тело для будущей сущности и создаём всё необходимое для её жизни
     -- В это число в первую очередь входит поток событий, который будет сообщать сущности
     -- какой образ выбрать текущим и когда кончится его время (метка времени следующего
@@ -230,32 +226,41 @@ tryAnimateShGDYa str = do
         False -> do
             (e_a, fn_a)   <- sync newEvent -- поток сигналов для смены образа
             (b_ct, fn_ct) <- sync . newBehaviour =<< currts -- состояние текущего времени
-            let delay = 10 * 1000
-            ii <- buildShGDYaBody ne ".image" fn_a delay
-            shgdya <- sync $ animateShGDYa e_a ii delay b_ct 0
+            let delay = 3 * 1000
+            ii <- buildSHRIIYABody ne ".image" fn_a delay
+            ii `addcln` "current"
+            shriiya <- sync $ animateSHRIIYA e_a ii delay b_ct 0
+
+            let findnext :: IO (DocumentElement, Double)
+                findnext = do
+                    nt <- liftM ((+) delay) currts
+                    nn <- ne `nqsel` (".current + " ++ ".image")
+                    if isNull nn
+                        then ne `nqsel` ".image" >>= return . flip (,) nt
+                        else return (nn, nt)
+
             let loop = do
                 cts <- currts
-                nts <- sync $ sample (nextUpdateTS shgdya)
-                sync $ fn_ct cts
+                nts <- sync $ sample (nextUpdateTS shriiya)
+                if cts >= nts
+                    then do
+                        next <- findnext
+                        sync $ fn_a next >> fn_ct cts
+                    else sync $ fn_ct cts
                 reqaf loop
 
             forkIO (reqaf loop)
-            x <- sync $ listen ((value . activeImage) shgdya) (\o -> consobj o)
-            y <- sync $ listen ((value . nextUpdateTS) shgdya) (\t -> ngebi "trace" >>= flip setintext (show t) >> return ())
+            x <- sync $ listen ((value . activeImage) shriiya) (\o -> consobj o)
+            y <- sync $ listen ((value . nextUpdateIn) shriiya) (\t -> ngebi "trace" >>= flip setintext (show t) >> return ())
             conslog "Оживление завершено"
             consobj ne
     consgre
 
 
 targetId :: String
-targetId = "shgdya"
+targetId = "shriiya"
 
 
 main = do
     let tid = targetId
-    tryAnimateShGDYa tid
--- Поиск элемента, элементов
--- Настройка стилей
--- Создание реактивных событий
--- Оживление ШГДЯ
--- Связка действительных событий с исполнителями/управленцами
+    tryAnimateSHRIIYA tid
