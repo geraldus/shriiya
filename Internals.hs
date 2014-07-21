@@ -79,8 +79,9 @@ buildShriiyaBody h = do
     consobj hld
 
     qimgs <- hld `qsela` (imageXPath h)
-    conslog $ "Найдено образовпо х-пути `" ++ (imageXPath h) ++ "`: " ++ (show . length) qimgs ++ "."
+    consgrp $ "Найдено образовпо х-пути `" ++ (imageXPath h) ++ "`: " ++ (show . length) qimgs ++ "."
     imgs <- mapM (\(e,n) -> consobj e >> makeShriiyaImage e n (defaultDelay h)) (zip qimgs [0,1..])
+    consgre
 
     scr <- dcrel "div" >>= flip addcln "image-screen" >>= appcld hld
     mapM_ (\ (ShriiyaImage e n d) -> appcld scr e) imgs
@@ -91,6 +92,7 @@ buildShriiyaBody h = do
 
     th <- dcrel "div" >>= flip addcln "timer-holder" >>= appcld hld
     tb <- dcrel "div" >>= flip addcln "timer-bar" >>= appcld th
+    consgrp "Создан блок для отображения таймера" >> consobj th >> consgre
 
     consgre
     return $ ShriiyaBody hld keys scr sh th tb
@@ -117,8 +119,7 @@ buildShriiyaSwitches h is = do
                    ) is
     h `appcld` sh
 
-    conslog "Созданы переключатели"
-    consobj sh
+    consgrp "Созданы переключатели" >> consobj sh >> consgre
 
     return (sh, ks)
 
@@ -147,22 +148,22 @@ originateShriiya :: Event (ShriiyaKey, Double) -- поток событий, к�
                -> ShriiyaKey -- первый образ
                -> Behaviour Double -- поведение, содержащее значение текущей метки времени, миллисекунды
                -> Reactive ShriiyaState
-originateShriiya e_alrm e_animfl k1 b_curT = do
+originateShriiya e_kalrm e_aalrm k1 b_curT = do
     -- Создаём саму сущность
     ct <- sample b_curT
     let ShriiyaKey (ShriiyaImage _ _ delay) _ = k1
 
-    let e_curK  = fst <$> e_alrm
-        e_nxtUpdT = (\((ShriiyaKey (ShriiyaImage _ _ d) _),t) -> t + d) <$> e_alrm
+    let e_curK  = fst <$> e_kalrm
+        e_nxtUpdT = (\((ShriiyaKey (ShriiyaImage _ _ d) _),t) -> t + d) <$> e_kalrm
 
     rb_curK <- hold k1 e_curK
     rb_nxtUpdT <- hold (ct + delay) e_nxtUpdT
     let rb_nxtUpd = subtract <$> b_curT <*> rb_nxtUpdT
 
     let animDur = 300
-        e_anim = (\(_, t) -> Just (Animation t animDur)) <$> e_alrm
-        e_animflush = (\_ -> Nothing) <$> e_animfl
-    rb_anim <- hold Nothing (merge e_anim e_animflush)
+        e_anim = (\(_, t) -> Just (Animation t animDur)) <$> e_kalrm
+        e_animrst = (\_ -> Nothing) <$> e_aalrm
+    rb_anim <- hold Nothing (merge e_anim e_animrst)
 
     return $ ShriiyaState rb_curK rb_nxtUpdT rb_nxtUpd rb_anim
 
@@ -191,9 +192,9 @@ tryAnimateShriiya h = do
 
             (e_alrm, fn_alrm)   <- sync newEvent -- поток сигналов для смены образа
             (b_curT, fn_curT) <- sync . newBehaviour =<< currts -- состояние текущего времени
-            (e_animfl, fn_animfl) <- sync newEvent
+            (e_animrst, fn_animrst) <- sync newEvent
 
-            shriiya <- sync $ originateShriiya e_alrm e_animfl k1 b_curT
+            shriiya <- sync $ originateShriiya e_alrm e_animrst k1 b_curT
 
             (b_usrK, fn_usrK) <- sync $ newBehaviour [] -- Behaviour (ShriiyaKey, Double) | ключ - время
             bindEvents b_usrK fn_usrK ks
@@ -262,7 +263,7 @@ tryAnimateShriiya h = do
                 if length uk /= 0
                     then do
                         let (nk, nt) = head uk
-                        sync $ fn_alrm (nk, nt)
+                        sync $ fn_alrm (nk, nt) >> fn_usrK []
                     else return ()
 
                 conslog "Передаю новую метку времени"
@@ -274,7 +275,7 @@ tryAnimateShriiya h = do
                     Just a -> do
                         renderAnimation a
                         if cts >= (startedAt a) + (duration a)
-                            then sync $ fn_animfl ()
+                            then sync $ fn_animrst ()
                             else return ()
 
                 reqaf loop
