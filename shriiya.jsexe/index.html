@@ -8,9 +8,15 @@
     <script language="javascript" src="lib1.js"></script>
     <script language="javascript" src="out.js"></script>
     <style>
-        BODY { font-family : 'DejaVu Sans'; }
+        BODY {
+            font-family : 'DejaVu Sans';
+            background : rgb (230, 230, 230);
+        }
+
         H1 { text-align : center; }
+
         .Dn { display : none; }
+
         #main {
             width : 100%;
             height : 100%;
@@ -21,35 +27,76 @@
             margin : auto;
             position : relative;
             display : flex;
-            flex-wrap : wrap;
+            flex-flow : column;
+            /* flex-wrap : wrap; */
+            box-shadow : 0 0 35px 5px rgba(100,100,100,0.3);
         }
-            #shriiya .image {
+        .image-screen {
+            flex-grow : 1;
+            flex-shrink : 0;
+            width : 100%;
+            height : 100%;
+            overflow : hidden;
+            position : relative;
+            display : flex;
+            justify-content : frex-statrt;
+            z-index : 0;
+        }
+            .image {
+                height : 100%;
+                width : 100%;
                 flex-grow : 1;
                 flex-shrink : 0;
-                width : 100%;
-                height : 95%;
             }
         .switches {
+            height : 1em;
+            margin-top : -1.5em;
             display : flex;
             flex-grow : 1;
             flex-shrink : 0;
             justify-content : center;
+            z-index : 1;
         }
-        .switch {
-            font-size : 0.5em;
-            font-weight : 100;
-            margin : 0 0.1em;
-            padding : 0.2em;
+            .switch {
+                height : 1em;
+                width : 1em;
+                border-radius : 1em;
+                font-size : 0.5em;
+                font-weight : 100;
+                margin : 0 0.5em;
+                cursor : pointer;
+                background : rgba(255,255,255,0.5);
+                box-shadow : inset 0 0 2px 1px rgba(100,100,100,0.3);
+            }
+        .timer-holder {
+            left : 0.1em;
+            right : 0.1em;
+            bottom : 0.1em;
+            height : 0.2em;
+            position : absolute;
         }
+            .timer-bar {
+                height : 100%;
+                width : 100%;
+                border-radius : 0.2em;
+                background : rgba(255, 230, 150, 0.3);
+                box-shadow : inset 0 0 1px 0 rgba(255,255,255,0.7);
+                z-index : 1;
+            }
+
+
+        #img1 { background : rgb(200,80,50); }
+        #img2 { background : rgb(80,200,50); }
+        #img3 { background : rgb(50,80,200); }
     </style>
   </head>
   <body>
       <div id="main">
           <h1>ШРÏѦ</h1>
           <div id="shriiya">
-              <div class="image">Образъ 1</div>
-              <div class="image Dn">Образъ 2</div>
-              <div class="image Dn">Образъ 3</div>
+              <div id="img1" class="image" data-delay="3000">Образъ 1</div>
+              <div id="img2" class="image" data-delay="10000">Образъ 2</div>
+              <div id="img3" class="image">Образъ 3</div>
           </div>
       </div>
       <div id="trace"></div>
