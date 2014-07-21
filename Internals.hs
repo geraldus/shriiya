@@ -28,7 +28,7 @@ data Animation = Animation
                      }
 
 -- | ShriiyaHeritage - Наследие Шрийи
-data ShriiyaHeritage = ShriiyaHeritage 
+data ShriiyaHeritage = ShriiyaHeritage
                            { hostElement :: DocumentElement -- ^ тело - элемент документа
                            , defaultDelay :: Double -- ^ задержка для образов по умолчанию
                            , imageXPath :: String -- ^ х-путь для поиска образов
@@ -81,7 +81,7 @@ buildShriiyaBody h = do
     qimgs <- hld `qsela` (imageXPath h)
     conslog $ "Найдено образовпо х-пути `" ++ (imageXPath h) ++ "`: " ++ (show . length) qimgs ++ "."
     imgs <- mapM (\(e,n) -> consobj e >> makeShriiyaImage e n (defaultDelay h)) (zip qimgs [0,1..])
-    
+
     scr <- dcrel "div" >>= flip addcln "image-screen" >>= appcld hld
     mapM_ (\ (ShriiyaImage e n d) -> appcld scr e) imgs
     consgrp "Образы перенесены в специальное место"
@@ -122,7 +122,7 @@ buildShriiyaSwitches h is = do
 
     return (sh, ks)
 
-bindEvents :: Behaviour [(ShriiyaKey, Double)] -- состояние, в которое записываются события от мышки 
+bindEvents :: Behaviour [(ShriiyaKey, Double)] -- состояние, в которое записываются события от мышки
            -> ([(ShriiyaKey, Double)] -> Reactive ()) -- функция управления состоянием
            -> [ShriiyaKey] -- ключи номер-образ-переключатель
            -> IO ()
@@ -150,22 +150,18 @@ originateShriiya :: Event (ShriiyaKey, Double) -- поток событий, к�
 originateShriiya e_alrm e_animfl k1 b_curT = do
     -- Создаём саму сущность
     ct <- sample b_curT
-    let e_curT = value b_curT
-        ShriiyaKey (ShriiyaImage _ _ delay) _ = k1
-    (b_nxtUpdT, _) <- newBehaviour (delay + ct)
-    (b_curK, _) <- newBehaviour k1
+    let ShriiyaKey (ShriiyaImage _ _ delay) _ = k1
 
-    let e_curK  = snapshot (\(k,_) _ -> k) e_alrm b_curK
-        e_nxtUpdT = snapshot (\((ShriiyaKey (ShriiyaImage _ _ d) _),t) _ -> t + d) e_alrm b_nxtUpdT
+    let e_curK  = fst <$> e_alrm
+        e_nxtUpdT = (\((ShriiyaKey (ShriiyaImage _ _ d) _),t) -> t + d) <$> e_alrm
 
     rb_curK <- hold k1 e_curK
     rb_nxtUpdT <- hold (ct + delay) e_nxtUpdT
     let rb_nxtUpd = subtract <$> b_curT <*> rb_nxtUpdT
 
-    (b_anim, _) <- newBehaviour $ Animation ct 0
     let animDur = 300
-        e_anim = snapshot (\(_, t) _ -> Just (Animation t animDur)) e_alrm b_anim
-        e_animflush = snapshot (\_ _ -> Nothing) e_animfl b_anim
+        e_anim = (\(_, t) -> Just (Animation t animDur)) <$> e_alrm
+        e_animflush = (\_ -> Nothing) <$> e_animfl
     rb_anim <- hold Nothing (merge e_anim e_animflush)
 
     return $ ShriiyaState rb_curK rb_nxtUpdT rb_nxtUpd rb_anim
@@ -198,13 +194,13 @@ tryAnimateShriiya h = do
             (e_animfl, fn_animfl) <- sync newEvent
 
             shriiya <- sync $ originateShriiya e_alrm e_animfl k1 b_curT
-    
+
             (b_usrK, fn_usrK) <- sync $ newBehaviour [] -- Behaviour (ShriiyaKey, Double) | ключ - время
             bindEvents b_usrK fn_usrK ks
 
             -- FIXME Проверочная строчка, убрать
             sync $ fn_alrm (k1,0)
-            
+
             let tmbr = timerBar body
 
             let next :: ShriiyaKey -> ShriiyaKey
@@ -250,25 +246,25 @@ tryAnimateShriiya h = do
                 cts <- currts
                 conslog $ "Новая метка времени: " ++ (show cts) ++ "."
 
-                -- nts <- sync $ sample (nextUpdateTS shriiya)
-                let nts = 0
+                nts <- sync $ sample (nextUpdateTS shriiya)
+                -- let nts = 0
                 conslog $ "Следующее обновление в " ++ (show nts) ++ "."
 
                 ck  <- sync $ sample (activeKey shriiya)
-                
+
                 conslog "Проверяю время переключения образа"
                 if cts >= nts
                     then sync $ fn_alrm (next ck, cts)
-                    else return () 
+                    else return ()
 
                 conslog "Проверяю события мыши"
                 uk <- sync $ sample b_usrK
                 if length uk /= 0
                     then do
                         let (nk, nt) = head uk
-                        sync $ fn_alrm (nk, nt) 
+                        sync $ fn_alrm (nk, nt)
                     else return ()
-                
+
                 conslog "Передаю новую метку времени"
                 sync $ fn_curT cts
 
@@ -291,16 +287,16 @@ tryAnimateShriiya h = do
                         vs = show v ++ "%"
                     tmbr `styleWidth` vs
                     return ()
-    
+
             let renderChange :: ShriiyaKey -> IO ()
                 renderChange (ShriiyaKey (ShriiyaImage e n d) s) = do
                     let shost = (switchesHost body)
                     shost `nqsel` ".current" >>= (\p -> if isNull p then return () else p `remcln` "current" >> return ())
                     s `addcln` "current"
                     return ()
-            
+
             conslog "Запускаю петляющую функцию в отдельной ните..."
-            
+
             forkIO (reqaf loop)
             x <- sync $ listen ((value . activeKey) shriiya) renderChange
             y <- sync $ listen ((value . nextUpdateIn) shriiya) renderTimer
