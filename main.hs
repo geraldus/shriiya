@@ -15,5 +15,5 @@ main = do
     let tid = "shriiya"
     ns <- ngebi tid
     case isNull ns of
-        False -> tryAnimateShriiya $ ShriiyaHeritage ns 15000 ".image"
+        False -> tryAnimateShriiya $ ShriiyaHeritage ns 5000 ".image"
         True -> conserr $ "Не найден элемент `" ++ tid ++ "`."
