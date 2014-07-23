@@ -14,17 +14,14 @@ import GHCJS.Foreign( fromJSString )
 
 import GDom.CommonDom
 
-foldlMerge :: [Event a] -> Event a
-foldlMerge (e:es) = foldl merge e es
-
 class Host a where
     host :: a -> DocumentElement
 
 -- | Animation - Текущее действие, которое производит сущность
 data Animation = Animation
-                     { startedAt :: Double -- ^ метка времени начала действия
-                     , duration :: Double -- ^ длительность действия
-                     -- , renderFn :: Double -> IO () -- ^ функция, которая меняет тело сущности
+                     { prev :: ShriiyaKey
+                     , next :: ShriiyaKey
+                     , started :: Double -- ^ метка времени начала действия
                      }
 
 -- | ShriiyaHeritage - Наследие Шрийи
@@ -58,8 +55,8 @@ instance Host ShriiyaBody where
 data ShriiyaState = ShriiyaState
          { activeKey    :: Behaviour ShriiyaKey -- ^ текущее изображение
          , nextUpdateTS :: Behaviour Double -- ^ метка времени следуюего обновления, мсек
-         , nextUpdateIn :: Behaviour Double -- ^ кол-во времени до следующего обновления, мсек
-         , currentAnimation :: Behaviour (Maybe Animation)
+         , progress :: Event (Double,Double) -- ^ пара (кол-во времени до следующего обновления, общая длительность), мсек
+         , frameMargin :: Event Double -- ^ смещение образов на текущий момент времени (для анимации)
          }
 
 -- | ШРÏѦ - Шриия
@@ -69,7 +66,7 @@ data ShriiyaState = ShriiyaState
 -- Что на выходе? Поведение, содержащее текущее состояние сущности
 -- В потоке ввода-вывода организовывается прослушивание состояния сущности и осуществляется
 -- обновление объектов документа
-type Shriiya = Behaviour ShriiyaState
+type Shriiya = Reactive ShriiyaState
 
 buildShriiyaBody :: ShriiyaHeritage -- наследие Шрийи
                  -> IO ShriiyaBody -- тело Шрийи
@@ -147,7 +144,7 @@ originateShriiya :: Event (ShriiyaKey, Double) -- поток событий, к�
                -> Event () -- поток событий, который сообщает необходимость сбросить анимацию
                -> ShriiyaKey -- первый образ
                -> Behaviour Double -- поведение, содержащее значение текущей метки времени, миллисекунды
-               -> Reactive ShriiyaState
+               -> Shriiya
 originateShriiya e_kalrm e_aalrm k1 b_curT = do
     -- Создаём саму сущность
     ct <- sample b_curT
@@ -158,14 +155,32 @@ originateShriiya e_kalrm e_aalrm k1 b_curT = do
 
     rb_curK <- hold k1 e_curK
     rb_nxtUpdT <- hold (ct + delay) e_nxtUpdT
-    let rb_nxtUpd = subtract <$> b_curT <*> rb_nxtUpdT
+    let b_nxtUpdIn = subtract <$> b_curT <*> rb_nxtUpdT
+        e_nxtUpdIn = value b_nxtUpdIn
+        e_prg      = snapshot (\ut (ShriiyaKey (ShriiyaImage _ _ dl) _) -> (ut,dl)) e_nxtUpdIn rb_curK
 
-    let animDur = 300
-        e_anim = (\(_, t) -> Just (Animation t animDur)) <$> e_kalrm
-        e_animrst = (\_ -> Nothing) <$> e_aalrm
-    rb_anim <- hold Nothing (merge e_anim e_animrst)
+    let anDur = 400
+        e_newa = snapshot (\(nk,t) pk -> Just $ Animation pk nk t) e_kalrm rb_curK
+        -- TODO FIXME Проверить, можно ли не использовать внешние оповещения для анимации
+        e_rsta = const Nothing <$> e_aalrm
+        e_ma = merge e_newa e_rsta
 
-    return $ ShriiyaState rb_curK rb_nxtUpdT rb_nxtUpd rb_anim
+    b_ma <- hold Nothing e_ma
+    let mrg = \(ShriiyaKey (ShriiyaImage _ n _) _) -> fromIntegral (negate n * 100)
+        mfn = \ma ct ->
+                  case ma of
+                      Nothing -> Nothing
+                      Just (Animation pk nk st) ->
+                          let mp = mrg pk
+                              mn = mrg nk
+                              m = if ct < st + anDur
+                                      then mn - ((mn - mp) * (st + anDur - ct) / anDur)
+                                      else mn
+                          in Just m
+        b_mmrg = mfn <$> b_ma <*> b_curT
+        e_mrg = filterJust (value b_mmrg)
+
+    return $ ShriiyaState rb_curK rb_nxtUpdT e_prg e_mrg
 
 tryAnimateShriiya :: ShriiyaHeritage -> IO ()
 tryAnimateShriiya h = do
@@ -199,9 +214,6 @@ tryAnimateShriiya h = do
             (b_usrK, fn_usrK) <- sync $ newBehaviour [] -- Behaviour (ShriiyaKey, Double) | ключ - время
             bindEvents b_usrK fn_usrK ks
 
-            -- FIXME Проверочная строчка, убрать
-            sync $ fn_alrm (k1,0)
-
             let tmbr = timerBar body
 
             let next :: ShriiyaKey -> ShriiyaKey
@@ -211,54 +223,24 @@ tryAnimateShriiya h = do
                         else n + 1
                     in ks !! nn
 
-            let renderAnimation :: Animation -> IO ()
-                renderAnimation a = do
-                    pT <- sync $ sample b_curT
-                    cT <- currts
-                    cK <- sync $ sample (activeKey shriiya)
-                    let fT = (startedAt a) + (duration a)
-                        (ShriiyaKey (ShriiyaImage _ n _) _) = cK
-                        fX = (negate . fromIntegral) n * 100
-
-                    conslog $ "Время завершения анимации" ++ show fT
-
-                    if fT <= cT
-                        then k1e `styleMLeft` ((show fX) ++ "%")
-                        else do
-                            cX <- getCurMrg
-                            let rT = fT - cT -- времени осталось до конца анимации
-                                tT = fT - pT -- времени с прошлого раза до конца анимации
-                                dT = tT - rT -- времени прошло с последнего обновления
-                                v = (fX - cX) / tT -- скорость движения образа
-                                nX = fX - v*dT
-                            k1e `styleMLeft` ((show nX) ++ "%")
-                    return ()
-                        where
-                            getCurMrg :: IO Double
-                            getCurMrg = do
-                                mrgstr <- getStyleMLeft k1e
-                                return $ if mrgstr == [] || (last mrgstr) /= '%'
-                                    then 0
-                                    else read (init mrgstr)
-
             let loop = do
-                conslog "Петля"
+                -- conslog "Петля"
 
                 cts <- currts
-                conslog $ "Новая метка времени: " ++ (show cts) ++ "."
+                -- conslog $ "Новая метка времени: " ++ (show cts) ++ "."
 
                 nts <- sync $ sample (nextUpdateTS shriiya)
                 -- let nts = 0
-                conslog $ "Следующее обновление в " ++ (show nts) ++ "."
+                -- conslog $ "Следующее обновление в " ++ (show nts) ++ "."
 
                 ck  <- sync $ sample (activeKey shriiya)
 
-                conslog "Проверяю время переключения образа"
+                -- conslog "Проверяю время переключения образа"
                 if cts >= nts
                     then sync $ fn_alrm (next ck, cts)
                     else return ()
 
-                conslog "Проверяю события мыши"
+                -- conslog "Проверяю события мыши"
                 uk <- sync $ sample b_usrK
                 if length uk /= 0
                     then do
@@ -266,28 +248,11 @@ tryAnimateShriiya h = do
                         sync $ fn_alrm (nk, nt) >> fn_usrK []
                     else return ()
 
-                conslog "Передаю новую метку времени"
+                -- conslog "Передаю новую метку времени"
                 sync $ fn_curT cts
-
-                ma <- sync $ sample (currentAnimation shriiya)
-                case ma of
-                    Nothing -> return ()
-                    Just a -> do
-                        renderAnimation a
-                        if cts >= (startedAt a) + (duration a)
-                            then sync $ fn_animrst ()
-                            else return ()
 
                 reqaf loop
 
-
-            let renderTimer :: Double -> IO ()
-                renderTimer t = do
-                    (ShriiyaKey (ShriiyaImage _ _ delay) _) <- sync $ sample (activeKey shriiya)
-                    let v = (100 * t / delay)
-                        vs = show v ++ "%"
-                    tmbr `styleWidth` vs
-                    return ()
 
             let renderChange :: ShriiyaKey -> IO ()
                 renderChange (ShriiyaKey (ShriiyaImage e n d) s) = do
@@ -296,10 +261,30 @@ tryAnimateShriiya h = do
                     s `addcln` "current"
                     return ()
 
+            let renderTimer :: (Show a, Fractional a) => (a,a) -> IO ()
+                renderTimer (tr,dl) = do
+                    let v = (100 * tr / dl)
+                        vs = show v ++ "%"
+                    tmbr `styleWidth` vs
+                    return ()
+
+            let renderFrame :: Double -> IO ()
+                renderFrame mv = k1e `styleMLeft` ((show mv) ++ "%") >> return ()
+
             conslog "Запускаю петляющую функцию в отдельной ните..."
 
             forkIO (reqaf loop)
             x <- sync $ listen ((value . activeKey) shriiya) renderChange
-            y <- sync $ listen ((value . nextUpdateIn) shriiya) renderTimer
+            y <- sync $ listen (progress shriiya) renderTimer
+            z <- sync $ listen (frameMargin shriiya) renderFrame
+
+                -- ma <- sync $ sample (currentAnimation shriiya)
+                -- case ma of
+                --     Nothing -> return ()
+                --     Just a -> do
+                --         renderAnimation a
+                --         if cts >= (startedAt a) + (duration a)
+                --             then sync $ fn_animrst ()
+                --             else return ()
             conslog "Оживление завершено"
     consgre
